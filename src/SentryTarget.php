@@ -87,7 +87,7 @@ class SentryTarget extends Target
 
             if ($dataFromLogger instanceof \Throwable) {
                 $dataToBeLogged = $this->runExtraCallback($dataFromLogger, $dataToBeLogged);
-                $this->client->captureException($dataFromLogger, $dataToBeLogged);
+                $this->client->captureException($dataFromLogger, $this->createScopeFromArray($dataToBeLogged));
                 continue;
             }
 
@@ -226,5 +226,18 @@ class SentryTarget extends Target
         $t = $getTags->call($data);
         if ($t === null) $t = new TagsContext();
         $t->merge($tags);
+    }
+
+    /**
+     * @param array $scopeArray
+     * @return Scope
+     */
+    private function createScopeFromArray(array $scopeArray)
+    {
+        $scope = new Scope();
+        foreach ($scopeArray as $key => $val) {
+            $scope->setExtra($key, $val);
+        }
+        return $scope;
     }
 }
