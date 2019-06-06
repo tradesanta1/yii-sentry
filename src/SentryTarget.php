@@ -85,6 +85,10 @@ class SentryTarget extends Target
                 'tags' => ['category' => $category]
             ];
 
+            if($this->isHttpRequest()) {
+                $dataToBeLogged['request'] = $this->getHttpRequestData();
+            }
+
             if ($dataFromLogger instanceof \Throwable) {
                 $dataToBeLogged = $this->runExtraCallback($dataFromLogger, $dataToBeLogged);
                 $this->client->captureException($dataFromLogger, $this->createScopeFromArray($dataToBeLogged));
