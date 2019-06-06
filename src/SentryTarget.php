@@ -8,6 +8,7 @@ use Sentry\Context\Context;
 use Sentry\Context\TagsContext;
 use Sentry\Severity;
 use Sentry\State\Scope;
+use yii\helpers\ArrayHelper;
 use yii\log\Logger;
 use yii\log\Target;
 
@@ -38,6 +39,8 @@ class SentryTarget extends Target
      * @var ClientInterface
      */
     protected $client;
+
+    public $ignoreServerPort = false;
 
     /**
      * @inheritdoc
@@ -237,7 +240,7 @@ class SentryTarget extends Target
             : (!empty($_SERVER['LOCAL_ADDR'])  ? $_SERVER['LOCAL_ADDR']
                 : (!empty($_SERVER['SERVER_ADDR']) ? $_SERVER['SERVER_ADDR'] : '')));
 
-        if (!$this->ignore_server_port) {
+        if (!$this->ignoreServerPort) {
             $hasNonDefaultPort = !empty($_SERVER['SERVER_PORT']) && !in_array((int)$_SERVER['SERVER_PORT'], array(80, 443));
             if ($hasNonDefaultPort && !preg_match('#:[0-9]*$#', $host)) {
                 $host .= ':' . $_SERVER['SERVER_PORT'];
@@ -246,6 +249,25 @@ class SentryTarget extends Target
 
         $httpS = $this->isHttps() ? 's' : '';
         return "http{$httpS}://{$host}{$_SERVER['REQUEST_URI']}";
+    }
+
+    private function isHttps()
+    {
+        if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
+            return true;
+        }
+
+        if (!empty($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443) {
+            return true;
+        }
+
+        if (!empty($this->trust_x_forwarded_proto) &&
+            !empty($_SERVER['HTTP_X_FORWARDED_PROTO']) &&
+            $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') {
+            return true;
+        }
+
+        return false;
     }
 
     /**
