@@ -296,23 +296,6 @@ class SentryTarget extends Target
     }
 
     /**
-     * @param Scope $data
-     * @param string $tags
-     * @throws \InvalidArgumentException
-     */
-    private function updateTagsInScope(Scope $data, array $tags)
-    {
-        $getTags = function () {
-            $this->tags;
-        };
-
-        /** @var TagsContext $t */
-        $t = $getTags->call($data);
-        if ($t === null) $t = new TagsContext();
-        $t->merge($tags);
-    }
-
-    /**
      * @param array $scopeArray
      * @return Scope
      */
