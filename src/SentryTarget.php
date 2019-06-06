@@ -206,6 +206,64 @@ class SentryTarget extends Target
     }
 
     /**
+     * Get the value of a key from $_SERVER
+     *
+     * @param string $key Key whose value you wish to obtain
+     * @return string     Key's value
+     */
+    private static function _server_variable($key)
+    {
+        if (isset($_SERVER[$key])) {
+            return $_SERVER[$key];
+        }
+
+        return '';
+    }
+
+    /**
+     * Return the URL for the current request
+     *
+     * @return string|null
+     */
+    private function get_current_url()
+    {
+        // When running from commandline the REQUEST_URI is missing.
+        if (!isset($_SERVER['REQUEST_URI'])) {
+            return null;
+        }
+
+        // HTTP_HOST is a client-supplied header that is optional in HTTP 1.0
+        $host = (!empty($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST']
+            : (!empty($_SERVER['LOCAL_ADDR'])  ? $_SERVER['LOCAL_ADDR']
+                : (!empty($_SERVER['SERVER_ADDR']) ? $_SERVER['SERVER_ADDR'] : '')));
+
+        if (!$this->ignore_server_port) {
+            $hasNonDefaultPort = !empty($_SERVER['SERVER_PORT']) && !in_array((int)$_SERVER['SERVER_PORT'], array(80, 443));
+            if ($hasNonDefaultPort && !preg_match('#:[0-9]*$#', $host)) {
+                $host .= ':' . $_SERVER['SERVER_PORT'];
+            }
+        }
+
+        $httpS = $this->isHttps() ? 's' : '';
+        return "http{$httpS}://{$host}{$_SERVER['REQUEST_URI']}";
+    }
+
+    /**
+     * Note: Prior to PHP 5.6, a stream opened with php://input can
+     * only be read once;
+     *
+     * @see http://php.net/manual/en/wrappers.php.php
+     */
+    private function getInputStream()
+    {
+        if (PHP_VERSION_ID < 50600) {
+            return null;
+        }
+
+        return file_get_contents('php://input');
+    }
+
+    /**
      * @param $level
      * @return Severity
      * @throws \InvalidArgumentException
