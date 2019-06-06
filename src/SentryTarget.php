@@ -71,70 +71,68 @@ class SentryTarget extends Target
     public function export()
     {
         foreach ($this->messages as $message) {
-            /** @var $dataToBeLogged mixed|string|\Throwable etc. */
+            /** @var $dataFromLogger mixed|string|\Throwable etc. */
             /** @var $level integer */
             /** @var $level integer */
             /** @var $category string */
             /** @var $timestamp float */
             /** @var $traces array (debug backtrace) */
-            list($dataToBeLogged, $level, $category, $timestamp, $traces) = $message;
+            list($dataFromLogger, $level, $category, $timestamp, $traces) = $message;
 
-            $scope = new Scope();
-            $scope->setLevel($this->getSeveretyFromYiiLoggerLevel($level));
-            $scope->setTag('category', $category);
-            if($this->isHttpRequest()) {
-                $scope->setExtra('request', $this->getHttpRequestData());
-            }
+            $dataToBeLogged = [
+                'level' => static::getLevelName($level),
+                'timestamp' => $timestamp,
+                'tags' => ['category' => $category]
+            ];
 
-            if ($dataToBeLogged instanceof \Throwable) {
-                $scope = $this->runExtraCallback($dataToBeLogged, $scope);
-                $this->client->captureException($dataToBeLogged, $scope);
+            if ($dataFromLogger instanceof \Throwable) {
+                $dataToBeLogged = $this->runExtraCallback($dataFromLogger, $dataToBeLogged);
+                $this->client->captureException($dataFromLogger, $dataToBeLogged);
                 continue;
             }
 
-            if (is_array($dataToBeLogged)) {
-                if (isset($dataToBeLogged['tags'])) {
-                    $this->updateTagsInScope($scope, $dataToBeLogged['tags']);
-                    unset($dataToBeLogged['tags']);
+            if (is_array($dataFromLogger)) {
+                if (isset($dataFromLogger['msg'])) {
+                    $dataToBeLogged['message'] = $dataFromLogger['msg'];
+                    unset($dataFromLogger['msg']);
                 }
 
-                $scope->setExtra('extra', $dataToBeLogged);
+                if (isset($dataFromLogger['tags'])) {
+                    $dataToBeLogged['tags'] = ArrayHelper::merge($dataToBeLogged['tags'], $dataFromLogger['tags']);
+                    unset($dataFromLogger['tags']);
+                }
+
+                $dataToBeLogged['extra'] = $dataFromLogger;
             } else {
-                $scope->setExtra('message', $dataToBeLogged);
+                $dataToBeLogged['message'] = $dataFromLogger;
             }
 
             if ($this->context) {
-                $scope->setExtra('context', $this->getContextMessage());
+                $dataToBeLogged['extra']['context'] = parent::getContextMessage();
             }
 
-            $scope = $this->runExtraCallback($dataToBeLogged, $scope);
+            $dataToBeLogged['extra']['traces'] = $traces;
 
-            $this->client->captureEvent($dataToBeLogged, $scope);
+            $dataToBeLogged = $this->runExtraCallback($dataFromLogger, $dataToBeLogged);
+
+            $this->client->captureEvent($dataToBeLogged);
         }
     }
 
     /**
      * Calls the extra callback if it exists
      *
-     * @param mixed $dataToBeLogged
-     * @param Scope $scope
-     * @return Scope
+     * @param mixed $dataFromLogger
+     * @param array $dataToBeLogged
+     * @return array
      */
-    public function runExtraCallback($dataToBeLogged, Scope $scope)
+    public function runExtraCallback($dataFromLogger, $dataToBeLogged)
     {
         if (is_callable($this->extraCallback)) {
-            $getExtra = function () {
-                $this->extra;
-            };
-
-            /** @var Context $extra */
-            $extra = $getExtra->call($dataToBeLogged);
-            if ($extra === null) $extra = new Context();
-
-            $extra->merge(call_user_func($this->extraCallback, $dataToBeLogged, $extra ? $extra : []));
+            $dataToBeLogged['extra'] = call_user_func($this->extraCallback, $dataFromLogger, $dataToBeLogged['extra'] ? $dataToBeLogged['extra'] : []);
         }
 
-        return $scope;
+        return $dataToBeLogged;
     }
 
     /**
