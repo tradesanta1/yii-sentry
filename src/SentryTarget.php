@@ -82,6 +82,9 @@ class SentryTarget extends Target
             $scope = new Scope();
             $scope->setLevel($this->getSeveretyFromYiiLoggerLevel($level));
             $scope->setTag('category', $category);
+            if($this->isHttpRequest()) {
+                $scope->setExtra('request', $this->getHttpRequestData());
+            }
 
             if ($dataToBeLogged instanceof \Throwable) {
                 $scope = $this->runExtraCallback($dataToBeLogged, $scope);
@@ -106,7 +109,7 @@ class SentryTarget extends Target
 
             $scope = $this->runExtraCallback($dataToBeLogged, $scope);
 
-            $this->client->captureMessage(implode(PHP_EOL, $traces), $scope->getLevel(), $scope);
+            $this->client->captureEvent($dataToBeLogged, $scope);
         }
     }
 
@@ -152,6 +155,52 @@ class SentryTarget extends Target
         ];
 
         return isset($levels[$level]) ? $levels[$level] : 'error';
+    }
+
+    private function isHttpRequest()
+    {
+        return isset($_SERVER['REQUEST_METHOD']) && PHP_SAPI !== 'cli';
+    }
+
+    private function getHttpRequestData()
+    {
+        $headers = array();
+
+        foreach ($_SERVER as $key => $value) {
+            if (0 === strpos($key, 'HTTP_')) {
+                $header_key =
+                    str_replace(' ', '-', ucwords(strtolower(str_replace('_', ' ', substr($key, 5)))));
+                $headers[$header_key] = $value;
+            } elseif (in_array($key, array('CONTENT_TYPE', 'CONTENT_LENGTH')) && $value !== '') {
+                $header_key = str_replace(' ', '-', ucwords(strtolower(str_replace('_', ' ', $key))));
+                $headers[$header_key] = $value;
+            }
+        }
+
+        $result = array(
+            'method' => self::_server_variable('REQUEST_METHOD'),
+            'url' => $this->get_current_url(),
+            'query_string' => self::_server_variable('QUERY_STRING'),
+        );
+
+        // dont set this as an empty array as PHP will treat it as a numeric array
+        // instead of a mapping which goes against the defined Sentry spec
+        if (!empty($_POST)) {
+            $result['data'] = $_POST;
+        } elseif (isset($_SERVER['CONTENT_TYPE']) && stripos($_SERVER['CONTENT_TYPE'], 'application/json') === 0) {
+            $raw_data = $this->getInputStream() ?: false;
+            if ($raw_data !== false) {
+                $result['data'] = (array) json_decode($raw_data, true) ?: null;
+            }
+        }
+        if (!empty($_COOKIE)) {
+            $result['cookies'] = $_COOKIE;
+        }
+        if (!empty($headers)) {
+            $result['headers'] = $headers;
+        }
+
+        return $result;
     }
 
     /**
