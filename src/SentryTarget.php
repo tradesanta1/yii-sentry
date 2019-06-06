@@ -1,6 +1,6 @@
 <?php
 
-namespace notamedia\sentry;
+namespace yii2sentry2\sentry;
 
 use Sentry\ClientBuilder;
 use Sentry\ClientInterface;
