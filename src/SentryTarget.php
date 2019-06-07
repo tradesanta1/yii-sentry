@@ -4,8 +4,10 @@ namespace yii2sentry2\sentry;
 
 use Sentry\ClientBuilder;
 use Sentry\ClientInterface;
+use Sentry\Context\UserContext;
 use Sentry\Integration\RequestIntegration;
 use Sentry\Options;
+use Sentry\Severity;
 use Sentry\State\Hub;
 use Sentry\State\Scope;
 use yii\helpers\ArrayHelper;
@@ -67,7 +69,7 @@ class SentryTarget extends Target
             ] + $this->clientOptions
         );
         $this->client = $clientBuilder->getClient();
-        Hub::setCurrent(new Hub($this->client));var_dump(Hub::getCurrent());
+        Hub::setCurrent(new Hub($this->client));
     }
 
     /**
@@ -91,24 +93,27 @@ class SentryTarget extends Target
             /** @var $timestamp float */
             /** @var $traces array (debug backtrace) */
             list($dataFromLogger, $level, $category, $timestamp, $traces) = $message;
-            $dataToBeLogged = [
-                'level' => static::getLevelName($level),
-                'timestamp' => $timestamp,
-                'tags' => ['category' => $category]
-            ];
+            $scope = new Scope();
+            $scope->setLevel($this->getSeveretyFromYiiLoggerLevel($level));
+            $scope->setExtra('DateTime', date('Y-m-d H:i:s', $timestamp));
+            $scope->setTag('category', $category);
 
-            $scope = $this->createScopeFromArray($dataToBeLogged);
             if ($dataFromLogger instanceof \Throwable) {
-                $dataToBeLogged = $this->runExtraCallback($dataFromLogger, $dataToBeLogged);
                 $this->client->captureException($dataFromLogger, $scope);
                 continue;
             }
 
             if (is_array($dataFromLogger) && $dataFromLogger['msg'] instanceof \Throwable) {
-                $dataToBeLogged = $this->runExtraCallback($dataFromLogger, $dataToBeLogged);
-                $this->client->captureException($dataFromLogger['msg'], $scope);
+                $exception = $dataFromLogger['msg'];
+                unset($dataFromLogger['msg']);
+                foreach ($dataFromLogger as $key => $extraData) {
+                    $scope->setExtra($key, $extraData);
+                }
+                $this->client->captureException($exception, $scope);
                 continue;
             }
+
+            $dataToBeLogged = [];
 
             if (is_array($dataFromLogger)) {
                 if (isset($dataFromLogger['msg'])) {
@@ -117,40 +122,48 @@ class SentryTarget extends Target
                 }
 
                 if (isset($dataFromLogger['tags'])) {
-                    $dataToBeLogged['tags'] = ArrayHelper::merge($dataToBeLogged['tags'], $dataFromLogger['tags']);
+                    $oldTags = [];
+                    if(isset($dataToBeLogged['tags'])) {
+                        $oldTags = $dataToBeLogged['tags'];
+                    }
+
+                    $dataToBeLogged['tags'] = ArrayHelper::merge($oldTags, $dataFromLogger['tags']);
                     unset($dataFromLogger['tags']);
                 }
 
-                $dataToBeLogged['extra'] = $dataFromLogger;
+                foreach ($dataFromLogger as $key => $value) {
+                    $scope->setExtra($key, $value);
+                }
             } else {
                 $dataToBeLogged['message'] = $dataFromLogger;
             }
 
             if ($this->context) {
-                $dataToBeLogged['extra']['context'] = parent::getContextMessage();
+                $scope->setExtra('context', parent::getContextMessage());
             }
+
+            $userContext = new UserContext();
+
+            try {
+                $userContext->setId(\Yii::$app->user->id);
+            } catch (\Throwable $t) {}
+
+            $scope->setUser($userContext->toArray());
 
             $dataToBeLogged['extra']['traces'] = $traces;
 
-            $dataToBeLogged = $this->runExtraCallback($dataFromLogger, $dataToBeLogged);
-            $this->client->captureEvent($dataToBeLogged);
+            $this->client->captureEvent($dataToBeLogged, $scope);
         }
     }
 
     /**
-     * Calls the extra callback if it exists
-     *
-     * @param mixed $dataFromLogger
-     * @param array $dataToBeLogged
-     * @return array
+     * @param $level
+     * @return Severity
+     * @throws \InvalidArgumentException
      */
-    public function runExtraCallback($dataFromLogger, $dataToBeLogged)
+    private function getSeveretyFromYiiLoggerLevel($level)
     {
-        if (is_callable($this->extraCallback)) {
-            $dataToBeLogged['extra'] = call_user_func($this->extraCallback, $dataFromLogger, $dataToBeLogged['extra'] ? $dataToBeLogged['extra'] : []);
-        }
-
-        return $dataToBeLogged;
+        return new Severity(static::getLevelName($level));
     }
 
     /**
@@ -171,18 +184,5 @@ class SentryTarget extends Target
         ];
 
         return isset($levels[$level]) ? $levels[$level] : 'error';
-    }
-
-    /**
-     * @param array $scopeArray
-     * @return Scope
-     */
-    private function createScopeFromArray(array $scopeArray)
-    {
-        $scope = new Scope();
-        foreach ($scopeArray as $key => $val) {
-            $scope->setExtra($key, $val);
-        }
-        return $scope;
     }
 }
