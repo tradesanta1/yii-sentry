@@ -4,9 +4,9 @@ namespace yii2sentry2\sentry;
 
 use Sentry\ClientBuilder;
 use Sentry\ClientInterface;
-use Sentry\Context\Context;
-use Sentry\Context\TagsContext;
-use Sentry\Severity;
+use Sentry\Integration\RequestIntegration;
+use Sentry\Options;
+use Sentry\State\Hub;
 use Sentry\State\Scope;
 use yii\helpers\ArrayHelper;
 use yii\log\Logger;
@@ -56,8 +56,18 @@ class SentryTarget extends Target
 
     private function initClient()
     {
-        $clientBuilder = ClientBuilder::create(['dsn' => $this->dsn] + $this->clientOptions);
+        $clientBuilder = ClientBuilder::create(
+            [
+                'dsn' => $this->dsn,
+                'integrations' => [
+                    new RequestIntegration(
+                        new Options(['send_default_pii' => true])
+                    )
+                ]
+            ] + $this->clientOptions
+        );
         $this->client = $clientBuilder->getClient();
+        Hub::setCurrent(new Hub($this->client));var_dump(Hub::getCurrent());
     }
 
     /**
@@ -81,20 +91,22 @@ class SentryTarget extends Target
             /** @var $timestamp float */
             /** @var $traces array (debug backtrace) */
             list($dataFromLogger, $level, $category, $timestamp, $traces) = $message;
-
             $dataToBeLogged = [
                 'level' => static::getLevelName($level),
                 'timestamp' => $timestamp,
                 'tags' => ['category' => $category]
             ];
 
-            if($this->isHttpRequest()) {
-                $dataToBeLogged['request'] = $this->getHttpRequestData();
-            }
-
+            $scope = $this->createScopeFromArray($dataToBeLogged);
             if ($dataFromLogger instanceof \Throwable) {
                 $dataToBeLogged = $this->runExtraCallback($dataFromLogger, $dataToBeLogged);
-                $this->client->captureException($dataFromLogger, $this->createScopeFromArray($dataToBeLogged));
+                $this->client->captureException($dataFromLogger, $scope);
+                continue;
+            }
+
+            if (is_array($dataFromLogger) && $dataFromLogger['msg'] instanceof \Throwable) {
+                $dataToBeLogged = $this->runExtraCallback($dataFromLogger, $dataToBeLogged);
+                $this->client->captureException($dataFromLogger['msg'], $scope);
                 continue;
             }
 
@@ -121,7 +133,6 @@ class SentryTarget extends Target
             $dataToBeLogged['extra']['traces'] = $traces;
 
             $dataToBeLogged = $this->runExtraCallback($dataFromLogger, $dataToBeLogged);
-
             $this->client->captureEvent($dataToBeLogged);
         }
     }
@@ -160,139 +171,6 @@ class SentryTarget extends Target
         ];
 
         return isset($levels[$level]) ? $levels[$level] : 'error';
-    }
-
-    private function isHttpRequest()
-    {
-        return isset($_SERVER['REQUEST_METHOD']) && PHP_SAPI !== 'cli';
-    }
-
-    private function getHttpRequestData()
-    {
-        $headers = array();
-
-        foreach ($_SERVER as $key => $value) {
-            if (0 === strpos($key, 'HTTP_')) {
-                $header_key =
-                    str_replace(' ', '-', ucwords(strtolower(str_replace('_', ' ', substr($key, 5)))));
-                $headers[$header_key] = $value;
-            } elseif (in_array($key, array('CONTENT_TYPE', 'CONTENT_LENGTH')) && $value !== '') {
-                $header_key = str_replace(' ', '-', ucwords(strtolower(str_replace('_', ' ', $key))));
-                $headers[$header_key] = $value;
-            }
-        }
-
-        $result = array(
-            'method' => self::_server_variable('REQUEST_METHOD'),
-            'url' => $this->get_current_url(),
-            'query_string' => self::_server_variable('QUERY_STRING'),
-        );
-
-        // dont set this as an empty array as PHP will treat it as a numeric array
-        // instead of a mapping which goes against the defined Sentry spec
-        if (!empty($_POST)) {
-            $result['data'] = $_POST;
-        } elseif (isset($_SERVER['CONTENT_TYPE']) && stripos($_SERVER['CONTENT_TYPE'], 'application/json') === 0) {
-            $raw_data = $this->getInputStream() ?: false;
-            if ($raw_data !== false) {
-                $result['data'] = (array) json_decode($raw_data, true) ?: null;
-            }
-        }
-        if (!empty($_COOKIE)) {
-            $result['cookies'] = $_COOKIE;
-        }
-        if (!empty($headers)) {
-            $result['headers'] = $headers;
-        }
-
-        return $result;
-    }
-
-    /**
-     * Get the value of a key from $_SERVER
-     *
-     * @param string $key Key whose value you wish to obtain
-     * @return string     Key's value
-     */
-    private static function _server_variable($key)
-    {
-        if (isset($_SERVER[$key])) {
-            return $_SERVER[$key];
-        }
-
-        return '';
-    }
-
-    /**
-     * Return the URL for the current request
-     *
-     * @return string|null
-     */
-    private function get_current_url()
-    {
-        // When running from commandline the REQUEST_URI is missing.
-        if (!isset($_SERVER['REQUEST_URI'])) {
-            return null;
-        }
-
-        // HTTP_HOST is a client-supplied header that is optional in HTTP 1.0
-        $host = (!empty($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST']
-            : (!empty($_SERVER['LOCAL_ADDR'])  ? $_SERVER['LOCAL_ADDR']
-                : (!empty($_SERVER['SERVER_ADDR']) ? $_SERVER['SERVER_ADDR'] : '')));
-
-        if (!$this->ignoreServerPort) {
-            $hasNonDefaultPort = !empty($_SERVER['SERVER_PORT']) && !in_array((int)$_SERVER['SERVER_PORT'], array(80, 443));
-            if ($hasNonDefaultPort && !preg_match('#:[0-9]*$#', $host)) {
-                $host .= ':' . $_SERVER['SERVER_PORT'];
-            }
-        }
-
-        $httpS = $this->isHttps() ? 's' : '';
-        return "http{$httpS}://{$host}{$_SERVER['REQUEST_URI']}";
-    }
-
-    private function isHttps()
-    {
-        if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
-            return true;
-        }
-
-        if (!empty($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443) {
-            return true;
-        }
-
-        if (!empty($this->trust_x_forwarded_proto) &&
-            !empty($_SERVER['HTTP_X_FORWARDED_PROTO']) &&
-            $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') {
-            return true;
-        }
-
-        return false;
-    }
-
-    /**
-     * Note: Prior to PHP 5.6, a stream opened with php://input can
-     * only be read once;
-     *
-     * @see http://php.net/manual/en/wrappers.php.php
-     */
-    private function getInputStream()
-    {
-        if (PHP_VERSION_ID < 50600) {
-            return null;
-        }
-
-        return file_get_contents('php://input');
-    }
-
-    /**
-     * @param $level
-     * @return Severity
-     * @throws \InvalidArgumentException
-     */
-    private function getSeveretyFromYiiLoggerLevel($level)
-    {
-        return new Severity(static::getLevelName($level));
     }
 
     /**
